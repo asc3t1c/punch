@@ -1,6 +1,6 @@
 # punch
 
-punch.py by nu11secur1ty 
+punch by nu11secur1ty 
 ![](https://raw.githubusercontent.com/asc3t1c/punch/refs/heads/main/doc/punch.jpg)
 
 Interactive multi-hash helper for legitimate recovery/testing of hashes you own.
