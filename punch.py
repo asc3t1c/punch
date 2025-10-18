@@ -1,6 +1,6 @@
 #!/usr/bin/python
 """
-punch.py by nu11secur1ty — polished version
+punch.py by nu11secur1ty 2025
 
 Interactive multi-hash helper for legitimate recovery/testing of hashes you own.
 Supports: md5, sha1, sha256, sha512, ntlm, bcrypt (bcrypt optional).
@@ -253,41 +253,130 @@ def mask_attack(target_hash: str, algo: str, mask: str,
         print(f"Mask attack stopped after {total:,} checks in {elapsed:.1f}s.")
     print("Mask finished; not found.")
     return None
-
+    
+#---------------------
+# Bruteforce
+#---------------------
 
 def brute_force(target_hash: str, algo: str, charset: str, max_len: int,
                 try_newline: bool = False, try_utf16le: bool = False) -> Optional[str]:
+    """
+    Brute-force by increasing length.
+    - Prints live symbols while cracking.
+    - Graceful Ctrl+C exit.
+    - Saves progress to 'punch_progress.txt' for resume.
+    """
+    progress_file = "punch_progress.txt"
+
+    # --- Load last progress if available ---
+    resume_from = None
+    if os.path.exists(progress_file):
+        try:
+            with open(progress_file, "r", encoding="utf-8") as pf:
+                line = pf.readline().strip()
+                if line:
+                    resume_from = line
+                    print(f"[+] Resuming from last candidate: '{resume_from}'")
+        except Exception as e:
+            print(f"[!] Could not read progress file: {e}")
+
     print(f"Starting brute-force: charset size={len(charset)} max_len={max_len}")
     total = 0
     start = time.time()
+    prev_candidate = ""
+    last_display_time = 0.0
+    resume_mode = bool(resume_from)
+    found_resume = not resume_mode  # will become True when we reach resume candidate
+
     try:
         for length in range(1, max_len + 1):
             if stop_event.is_set():
                 print(f"\nBrute-force interrupted before starting length {length}.")
                 break
+
             print(f"Trying length {length} ...")
             for tup in itertools.product(charset, repeat=length):
                 if stop_event.is_set():
                     print("\nBrute-force interrupted by user.")
                     break
+
                 candidate = "".join(tup)
+                if resume_mode and not found_resume:
+                    # Skip until we reach the saved candidate
+                    if candidate == resume_from:
+                        found_resume = True
+                    continue
+
                 total += 1
+
+                # --- Print discovered/changed symbol ---
+                if prev_candidate:
+                    for i in range(len(candidate)):
+                        if i >= len(prev_candidate) or candidate[i] != prev_candidate[i]:
+                            changed_symbol = candidate[i]
+                            changed_pos = i
+                    now = time.time()
+                    if now - last_display_time >= 0.05:
+                        sys.stdout.write(
+                            f"\rTesting: {candidate} (changed '{changed_symbol}' at pos {changed_pos})     "
+                        )
+                        sys.stdout.flush()
+                        last_display_time = now
+                else:
+                    sys.stdout.write(f"\rTesting: {candidate}   ")
+                    sys.stdout.flush()
+                prev_candidate = candidate
+
+                # --- Save progress every 10,000 tries ---
+                if total % 10000 == 0:
+                    try:
+                        with open(progress_file, "w", encoding="utf-8") as pf:
+                            pf.write(candidate)
+                    except Exception as e:
+                        print(f"\n[!] Could not write progress file: {e}")
+
+                # --- Periodic stats ---
                 if total % 200000 == 0:
                     elapsed = time.time() - start
+                    sys.stdout.write("\n")
                     print(f"Checked {total:,} ({total/elapsed:.1f} c/s), last='{candidate}'")
+
+                # --- Check candidate ---
                 res = check_candidate(candidate, target_hash, algo, try_newline, try_utf16le)
                 if res:
                     cand, raw = res
+                    sys.stdout.write("\n")
                     print(f"FOUND: '{cand}'  bytes={raw!r}")
+                    # Remove progress file when done
+                    try:
+                        os.remove(progress_file)
+                    except Exception:
+                        pass
                     return cand
+
             if stop_event.is_set():
                 break
+
+    except KeyboardInterrupt:
+        print("\nBrute-force stopped by user (Ctrl+C).")
+        stop_event.set()
+    except Exception as e:
+        print(f"\nError during brute-force: {e}")
     finally:
+        # Save last tested candidate to resume later
+        if prev_candidate:
+            try:
+                with open(progress_file, "w", encoding="utf-8") as pf:
+                    pf.write(prev_candidate)
+                print(f"\n[+] Progress saved: '{prev_candidate}' -> {progress_file}")
+            except Exception as e:
+                print(f"[!] Could not save progress: {e}")
+
         elapsed = time.time() - start
-        print(f"Brute-force stopped after {total:,} checks in {elapsed:.1f}s.")
+        print(f"\nBrute-force stopped after {total:,} checks in {elapsed:.1f}s.")
+
     print("Brute-force finished; not found.")
     return None
-
 
 # -------------------------
 # CLI / interactive
