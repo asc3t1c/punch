@@ -1,6 +1,6 @@
 #!/usr/bin/python
 """
-punch.py by nu11secur1ty 
+punch.py by nu11secur1ty 2025
 
 Interactive multi-hash helper for legitimate recovery/testing of hashes you own.
 Supports: md5, sha1, sha256, sha512, ntlm, bcrypt (bcrypt optional).
