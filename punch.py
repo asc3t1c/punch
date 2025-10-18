@@ -106,6 +106,7 @@ def md4(data: bytes) -> bytes:
 
     return A.to_bytes(4, "little") + B.to_bytes(4, "little") + C.to_bytes(4, "little") + D.to_bytes(4, "little")
 
+
 # -------------------------
 # Digest helpers
 # -------------------------
@@ -161,6 +162,7 @@ def check_candidate(candidate: str, target_hash: str, algo: str,
             except Exception:
                 pass
     return None
+
 
 # -------------------------
 # Attack modes
@@ -251,6 +253,7 @@ def brute_force(target_hash: str, algo: str, charset: str, max_len: int,
                 try_newline: bool = False, try_utf16le: bool = False,
                 resume_mode: bool = False) -> Optional[str]:
     progress_file = "punch_progress.txt"
+    found_file = "found.txt"
     resume_from = None
     if resume_mode and os.path.exists(progress_file):
         try:
@@ -284,15 +287,24 @@ def brute_force(target_hash: str, algo: str, charset: str, max_len: int,
                 candidate = "".join(tup)
                 if resume_mode and not found_resume:
                     if candidate == resume_from:
+                        # Found the saved point — resume after it
                         found_resume = True
                     continue
 
                 total += 1
 
-                # Print live
+                # Live small update: display candidate and last-changed char (throttled)
                 if prev_candidate:
-                    changed_symbol = candidate[-1]
-                    changed_pos = len(candidate)-1
+                    changed_symbol = None
+                    changed_pos = None
+                    # find first difference (left-to-right) — report last changed symbol
+                    maxl = max(len(prev_candidate), len(candidate))
+                    for i in range(maxl):
+                        a = prev_candidate[i] if i < len(prev_candidate) else None
+                        b = candidate[i] if i < len(candidate) else None
+                        if a != b:
+                            changed_pos = i
+                            changed_symbol = b
                     now = time.time()
                     if now - last_display_time >= 0.05:
                         sys.stdout.write(
@@ -303,9 +315,10 @@ def brute_force(target_hash: str, algo: str, charset: str, max_len: int,
                 else:
                     sys.stdout.write(f"\rTesting: {candidate}   ")
                     sys.stdout.flush()
+
                 prev_candidate = candidate
 
-                # Save progress
+                # Save progress every 10k attempts
                 if total % 10000 == 0:
                     try:
                         with open(progress_file, "w", encoding="utf-8") as pf:
@@ -313,20 +326,35 @@ def brute_force(target_hash: str, algo: str, charset: str, max_len: int,
                     except Exception as e:
                         print(f"\n[!] Could not write progress file: {e}")
 
+                # Periodic full-line status
                 if total % 200000 == 0:
                     elapsed = time.time() - start
                     sys.stdout.write("\n")
                     print(f"Checked {total:,} ({total/elapsed:.1f} c/s), last='{candidate}'")
 
+                # Check candidate
                 res = check_candidate(candidate, target_hash, algo, try_newline, try_utf16le)
                 if res:
                     cand, raw = res
                     sys.stdout.write("\n")
-                    print(f"FOUND: '{cand}'  bytes={raw!r}")
+                    print(f"[+] FOUND: '{cand}'  bytes={raw!r}")
+
+                    # Append result to found.txt
                     try:
-                        os.remove(progress_file)
+                        ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+                        with open(found_file, "a", encoding="utf-8") as ff:
+                            ff.write(f"{ts} | {algo} | {target_hash} | {cand}\n")
+                        print(f"[+] Logged result to {found_file}")
+                    except Exception as e:
+                        print(f"[!] Could not write found file: {e}")
+
+                    # Remove progress file (we finished)
+                    try:
+                        if os.path.exists(progress_file):
+                            os.remove(progress_file)
                     except Exception:
                         pass
+
                     return cand
 
             if stop_event.is_set():
@@ -335,7 +363,10 @@ def brute_force(target_hash: str, algo: str, charset: str, max_len: int,
     except KeyboardInterrupt:
         print("\nBrute-force stopped by user (Ctrl+C).")
         stop_event.set()
+    except Exception as e:
+        print(f"\nError during brute-force: {e}")
     finally:
+        # Save last candidate to progress file so we can resume next run
         if prev_candidate:
             try:
                 with open(progress_file, "w", encoding="utf-8") as pf:
@@ -349,6 +380,7 @@ def brute_force(target_hash: str, algo: str, charset: str, max_len: int,
 
     print("Brute-force finished; not found.")
     return None
+
 
 # -------------------------
 # CLI / interactive
@@ -387,9 +419,10 @@ def main() -> None:
         "\nChoose mode:\n"
         " 1) Dictionary attack (wordlist file)\n"
         " 2) Mask attack (mask like '?u?l?l?d?d')\n"
-        " 3) Brute-force (small search space, resume supported)\n"
+        " 3) Brute-force (start fresh)\n"
+        " 4) Brute-force (resume from last progress)\n"
     )
-    mode = prompt("Mode (1-3): ", "1")
+    mode = prompt("Mode (1-4): ", "1")
 
     try_utf16le = prompt("Try UTF-16LE variants? (y/N): ", "N").lower() == "y"
     try_newline = prompt("Try with trailing newline? (y/N): ", "N").lower() == "y"
@@ -408,7 +441,8 @@ def main() -> None:
             return
         mask_attack(target_hash, algo, mask, try_newline, try_utf16le)
 
-    elif mode == "3":
+    elif mode == "3" or mode == "4":
+        resume_option = (mode == "4")
         print("Charset presets: 1) lowercase 2) lower+digits 3) letters+digits 4) printable")
         preset = prompt("Preset (1-4): ", "1")
         if preset == "1":
@@ -426,18 +460,18 @@ def main() -> None:
             print("Invalid length. Exiting.")
             return
 
-        resume_option = False
+        # If user chose start fresh but progress file exists, warn and confirm
         progress_file = "punch_progress.txt"
-        if os.path.exists(progress_file):
-            print("\nDetected saved brute-force progress.")
-            print(" 1) Start fresh brute-force")
-            print(" 2) Continue from last progress")
+        if not resume_option and os.path.exists(progress_file):
+            print("\nSaved progress found.")
+            print(" 1) Start fresh (ignore saved progress)")
+            print(" 2) Continue from saved progress")
             choice = prompt("Choice (1-2): ", "1")
             if choice == "2":
                 resume_option = True
-                print("[+] Resuming saved progress.")
+                print("[+] Will resume saved progress.")
             else:
-                print("[+] Starting fresh brute-force (ignoring progress).")
+                print("[+] Starting fresh (ignoring saved progress).")
 
         print("Confirm start brute-force? This can be expensive. (y/N)")
         if prompt("> ", "N").lower() != "y":
