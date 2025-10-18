@@ -1,6 +1,6 @@
 #!/usr/bin/python
 """
-punch.py by nu11secur1ty 2025
+punch.py by nu11secur1ty 
 
 Interactive multi-hash helper for legitimate recovery/testing of hashes you own.
 Supports: md5, sha1, sha256, sha512, ntlm, bcrypt (bcrypt optional).
@@ -8,7 +8,7 @@ Supports: md5, sha1, sha256, sha512, ntlm, bcrypt (bcrypt optional).
 Modes:
   - dictionary attack (wordlist)
   - mask attack (simple masks like '?u?l?l?d?d')
-  - brute-force (small search space)
+  - brute-force (small search space, resume supported)
 
 Notes:
  - MD4 is implemented here so NTLM (MD4(utf-16le(password))) can be tested.
@@ -47,7 +47,6 @@ def _signal_handler(signum, frame) -> None:
 
 
 signal.signal(signal.SIGINT, _signal_handler)
-
 
 # -------------------------
 # Small MD4 implementation
@@ -107,7 +106,6 @@ def md4(data: bytes) -> bytes:
 
     return A.to_bytes(4, "little") + B.to_bytes(4, "little") + C.to_bytes(4, "little") + D.to_bytes(4, "little")
 
-
 # -------------------------
 # Digest helpers
 # -------------------------
@@ -124,14 +122,10 @@ def digest_hex(data_bytes: bytes, algo: str) -> str:
 
 def check_candidate(candidate: str, target_hash: str, algo: str,
                     try_newline: bool = False, try_utf16le: bool = False) -> Optional[Tuple[str, bytes]]:
-    """
-    Try candidate in a few common encodings and return (candidate, bytes) on match,
-    otherwise None.
-    """
     algo = algo.lower()
     variants: list[bytes] = []
 
-    # utf-8 bytes (and optional newline)
+    # utf-8 bytes
     try:
         b = candidate.encode("utf-8")
         variants.append(b)
@@ -140,7 +134,7 @@ def check_candidate(candidate: str, target_hash: str, algo: str,
     except Exception:
         pass
 
-    # utf-16le (NTLM or if requested)
+    # utf-16le
     if try_utf16le or algo == "ntlm":
         try:
             b = candidate.encode("utf-16le")
@@ -167,7 +161,6 @@ def check_candidate(candidate: str, target_hash: str, algo: str,
             except Exception:
                 pass
     return None
-
 
 # -------------------------
 # Attack modes
@@ -204,13 +197,11 @@ def dictionary_attack(target_hash: str, algo: str, wordlist_path: str,
 
 
 def _mask_to_parts(mask: str) -> list[list[str]]:
-    """Convert a mask like '?u?l?d' into a list of char-lists."""
     mapping = {
         "?l": list(string.ascii_lowercase),
         "?u": list(string.ascii_uppercase),
         "?d": list(string.digits),
         "?s": list(string.punctuation),
-        # all printable without control whitespace
         "?a": list("".join(ch for ch in string.printable if ch not in "\t\r\n\x0b\x0c")),
     }
     parts: list[list[str]] = []
@@ -222,7 +213,6 @@ def _mask_to_parts(mask: str) -> list[list[str]]:
                 parts.append(mapping[token])
                 i += 2
                 continue
-        # literal char
         parts.append([mask[i]])
         i += 1
     return parts
@@ -253,24 +243,16 @@ def mask_attack(target_hash: str, algo: str, mask: str,
         print(f"Mask attack stopped after {total:,} checks in {elapsed:.1f}s.")
     print("Mask finished; not found.")
     return None
-    
-#---------------------
-# Bruteforce
-#---------------------
 
+#--------------------------------
+# Brute-force with resume support
+#--------------------------------
 def brute_force(target_hash: str, algo: str, charset: str, max_len: int,
-                try_newline: bool = False, try_utf16le: bool = False) -> Optional[str]:
-    """
-    Brute-force by increasing length.
-    - Prints live symbols while cracking.
-    - Graceful Ctrl+C exit.
-    - Saves progress to 'punch_progress.txt' for resume.
-    """
+                try_newline: bool = False, try_utf16le: bool = False,
+                resume_mode: bool = False) -> Optional[str]:
     progress_file = "punch_progress.txt"
-
-    # --- Load last progress if available ---
     resume_from = None
-    if os.path.exists(progress_file):
+    if resume_mode and os.path.exists(progress_file):
         try:
             with open(progress_file, "r", encoding="utf-8") as pf:
                 line = pf.readline().strip()
@@ -285,8 +267,7 @@ def brute_force(target_hash: str, algo: str, charset: str, max_len: int,
     start = time.time()
     prev_candidate = ""
     last_display_time = 0.0
-    resume_mode = bool(resume_from)
-    found_resume = not resume_mode  # will become True when we reach resume candidate
+    found_resume = not resume_mode  # becomes True once resume candidate is reached
 
     try:
         for length in range(1, max_len + 1):
@@ -302,19 +283,16 @@ def brute_force(target_hash: str, algo: str, charset: str, max_len: int,
 
                 candidate = "".join(tup)
                 if resume_mode and not found_resume:
-                    # Skip until we reach the saved candidate
                     if candidate == resume_from:
                         found_resume = True
                     continue
 
                 total += 1
 
-                # --- Print discovered/changed symbol ---
+                # Print live
                 if prev_candidate:
-                    for i in range(len(candidate)):
-                        if i >= len(prev_candidate) or candidate[i] != prev_candidate[i]:
-                            changed_symbol = candidate[i]
-                            changed_pos = i
+                    changed_symbol = candidate[-1]
+                    changed_pos = len(candidate)-1
                     now = time.time()
                     if now - last_display_time >= 0.05:
                         sys.stdout.write(
@@ -327,7 +305,7 @@ def brute_force(target_hash: str, algo: str, charset: str, max_len: int,
                     sys.stdout.flush()
                 prev_candidate = candidate
 
-                # --- Save progress every 10,000 tries ---
+                # Save progress
                 if total % 10000 == 0:
                     try:
                         with open(progress_file, "w", encoding="utf-8") as pf:
@@ -335,19 +313,16 @@ def brute_force(target_hash: str, algo: str, charset: str, max_len: int,
                     except Exception as e:
                         print(f"\n[!] Could not write progress file: {e}")
 
-                # --- Periodic stats ---
                 if total % 200000 == 0:
                     elapsed = time.time() - start
                     sys.stdout.write("\n")
                     print(f"Checked {total:,} ({total/elapsed:.1f} c/s), last='{candidate}'")
 
-                # --- Check candidate ---
                 res = check_candidate(candidate, target_hash, algo, try_newline, try_utf16le)
                 if res:
                     cand, raw = res
                     sys.stdout.write("\n")
                     print(f"FOUND: '{cand}'  bytes={raw!r}")
-                    # Remove progress file when done
                     try:
                         os.remove(progress_file)
                     except Exception:
@@ -360,10 +335,7 @@ def brute_force(target_hash: str, algo: str, charset: str, max_len: int,
     except KeyboardInterrupt:
         print("\nBrute-force stopped by user (Ctrl+C).")
         stop_event.set()
-    except Exception as e:
-        print(f"\nError during brute-force: {e}")
     finally:
-        # Save last tested candidate to resume later
         if prev_candidate:
             try:
                 with open(progress_file, "w", encoding="utf-8") as pf:
@@ -391,14 +363,13 @@ def prompt(prompt_text: str, default: Optional[str] = None) -> str:
 
 def _validate_hex_hash(h: str, algo: str) -> bool:
     if algo == "bcrypt":
-        # bcrypt is not hex; skip simple validation
         return True
     h = h.strip().lower()
     return all(c in "0123456789abcdef" for c in h)
 
 
 def main() -> None:
-    print("Multi-Hash Cracker (polished, interactive)")
+    print("Multi-Hash Cracker (upgraded, interactive)")
     print("Supported algorithms: md5, sha1, sha256, sha512, ntlm, bcrypt")
     algo = prompt("Algorithm: ").strip().lower()
     if algo not in ("md5", "sha1", "sha256", "sha512", "ntlm", "bcrypt"):
@@ -416,7 +387,7 @@ def main() -> None:
         "\nChoose mode:\n"
         " 1) Dictionary attack (wordlist file)\n"
         " 2) Mask attack (mask like '?u?l?l?d?d')\n"
-        " 3) Brute-force (small search space)\n"
+        " 3) Brute-force (small search space, resume supported)\n"
     )
     mode = prompt("Mode (1-3): ", "1")
 
@@ -455,11 +426,25 @@ def main() -> None:
             print("Invalid length. Exiting.")
             return
 
+        resume_option = False
+        progress_file = "punch_progress.txt"
+        if os.path.exists(progress_file):
+            print("\nDetected saved brute-force progress.")
+            print(" 1) Start fresh brute-force")
+            print(" 2) Continue from last progress")
+            choice = prompt("Choice (1-2): ", "1")
+            if choice == "2":
+                resume_option = True
+                print("[+] Resuming saved progress.")
+            else:
+                print("[+] Starting fresh brute-force (ignoring progress).")
+
         print("Confirm start brute-force? This can be expensive. (y/N)")
         if prompt("> ", "N").lower() != "y":
             print("Cancelled.")
             return
-        brute_force(target_hash, algo, charset, max_len, try_newline, try_utf16le)
+
+        brute_force(target_hash, algo, charset, max_len, try_newline, try_utf16le, resume_option)
 
     else:
         print("Unknown mode. Exiting.")
