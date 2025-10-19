@@ -16,6 +16,10 @@ Notes:
  - bcrypt support requires `pip install bcrypt`. If not installed, bcrypt mode is disabled.
  - Use only on hashes you are authorized to test.
 
+In progress:
+![](In progress)
+
 Support:
 - Linux Debian distro
 - Windows 11
+
