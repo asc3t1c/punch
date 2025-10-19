@@ -17,7 +17,7 @@ Notes:
  - Use only on hashes you are authorized to test.
 
 In progress:
-![](In progress)
+![](doc/Punch-in-progress.png)
 
 Support:
 - Linux Debian distro
